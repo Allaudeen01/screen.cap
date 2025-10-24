@@ -1,201 +1,186 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Auto Screenshot & Compressor</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f5f7fa;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      color: #333;
-    }
-    h1 {
-      margin-bottom: 20px;
-      color: #111;
-    }
-    button {
-      padding: 10px 20px;
-      margin: 10px;
-      border: none;
-      border-radius: 8px;
-      background-color: #007bff;
-      color: white;
-      font-size: 16px;
-      cursor: pointer;
-      transition: 0.2s ease;
-    }
-    button:hover {
-      background-color: #0056b3;
-    }
-    #status {
-      margin-top: 20px;
-      font-size: 18px;
-      font-weight: 500;
-    }
-    #timer {
-      font-size: 24px;
-      margin-top: 10px;
-      color: #007bff;
-    }
+    body{font-family:Arial,sans-serif;background:#f5f7fa;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;color:#333}
+    h1{margin-bottom:20px;color:#111}
+    button{padding:10px 20px;margin:10px;border:none;border-radius:8px;background:#007bff;color:#fff;font-size:16px;cursor:pointer}
+    button:hover{background:#0056b3}
+    #status{margin-top:20px;font-size:18px;font-weight:500}
+    #timer{font-size:24px;margin-top:10px;color:#007bff}
   </style>
 </head>
 <body>
   <h1>Auto Screenshot Compressor</h1>
-
-  <button onclick="startAutoScreenshot()">🎥 Start Auto Screenshot</button>
-  <button onclick="stopAutoScreenshot()">🛑 Stop</button>
-
+  <button id="startBtn">🎥 Start Auto Screenshot</button>
+  <button id="stopBtn" disabled>🛑 Stop</button>
   <div id="status">Status: Idle</div>
-  <div id="timer">Next capture in: --</div>
+  <div id="timer">Next capture in: --:--</div>
 
   <script type="module">
-    // import the ESM build of browser-image-compression from CDN
     import imageCompression from "https://cdn.jsdelivr.net/npm/browser-image-compression@1.0.17/dist/browser-image-compression.esm.js";
 
-    let captureInterval;
-    let countdownInterval;
+    let captureInterval = null;
+    let countdownInterval = null;
     let nextCaptureIn = 0;
-    let stream;
+    let stream = null;
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusEl = document.getElementById('status');
+    const timerEl = document.getElementById('timer');
 
     async function selectWindow() {
       try {
-        const s = await navigator.mediaDevices.getDisplayMedia({
-          video: { cursor: "never" },
-          audio: false,
-        });
+        const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         return s;
       } catch (err) {
-        alert("You must allow screen capture for this to work.");
+        alert('You must allow screen capture for this to work.');
         throw err;
       }
     }
 
     async function captureFrame(s) {
-      return new Promise((resolve) => {
-        const video = document.createElement("video");
+      return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
         video.srcObject = s;
+        video.muted = true;
         video.playsInline = true;
-        video.play();
-        video.onloadedmetadata = () => {
-          const canvas = document.createElement("canvas");
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          video.pause();
-          canvas.toBlob((blob) => resolve(blob), "image/png");
-        };
+        video.style.display = 'none';
+        document.body.appendChild(video);
+        video.addEventListener('loadedmetadata', async () => {
+          try {
+            video.width = video.videoWidth;
+            video.height = video.videoHeight;
+            video.play();
+            // Wait a frame to ensure video has pixels
+            await new Promise(r => requestAnimationFrame(r));
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth || video.width;
+            canvas.height = video.videoHeight || video.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            video.pause();
+            document.body.removeChild(video);
+            canvas.toBlob(blob => {
+              if (blob) resolve(blob);
+              else reject(new Error('Canvas toBlob returned null'));
+            }, 'image/png');
+          } catch (e) {
+            reject(e);
+          }
+        }, { once: true });
+        video.addEventListener('error', (e) => reject(e), { once: true });
       });
     }
 
     async function compressImageWithCanvas(blob, quality = 0.7) {
       const img = await createImageBitmap(blob);
-      const canvas = document.createElement("canvas");
+      const canvas = document.createElement('canvas');
       canvas.width = img.width;
       canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
+      const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0);
       return new Promise((resolve) => {
-        canvas.toBlob(
-          (compressedBlob) => resolve(compressedBlob),
-          "image/jpeg",
-          quality
-        );
+        canvas.toBlob(b => resolve(b), 'image/jpeg', quality);
       });
     }
 
-    // compress using the library to target ~100KB
     async function compressWithLibrary(blob) {
-      const options = {
-        maxSizeMB: 0.1, // target ≈100 KB
-        useWebWorker: true,
-        maxIteration: 10,
-      };
+      const options = { maxSizeMB: 0.1, useWebWorker: true, maxIteration: 10 };
       try {
         const compressed = await imageCompression(blob, options);
         return compressed;
       } catch (err) {
-        console.warn("Library compression failed, falling back to input blob:", err);
+        console.warn('Library compression failed, falling back to input blob:', err);
         return blob;
       }
     }
 
     function downloadImage(blob) {
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
+      const a = document.createElement('a');
       a.href = url;
-      a.download = `screenshot_${new Date().toISOString()}.jpg`;
+      a.download = `screenshot_${new Date().toISOString().replace(/[:.]/g,'-')}.jpg`;
+      document.body.appendChild(a);
       a.click();
+      a.remove();
       URL.revokeObjectURL(url);
     }
 
     async function takeAndSave() {
+      if (!stream) return;
       try {
-        document.getElementById("status").textContent = "Status: Capturing...";
+        statusEl.textContent = 'Status: Capturing...';
         const frame = await captureFrame(stream);
 
-        document.getElementById("status").textContent = "Status: Canvas compressing...";
+        statusEl.textContent = 'Status: Canvas compressing...';
         const canvasCompressed = await compressImageWithCanvas(frame, 0.7);
 
-        document.getElementById("status").textContent = "Status: Library compressing...";
+        statusEl.textContent = 'Status: Library compressing...';
         const finalBlob = await compressWithLibrary(canvasCompressed);
 
-        document.getElementById("status").textContent = "Status: Downloading...";
+        statusEl.textContent = 'Status: Downloading...';
         downloadImage(finalBlob);
 
-        document.getElementById("status").textContent = "Status: Running";
+        statusEl.textContent = 'Status: Running';
       } catch (err) {
-        console.error("capture/save failed:", err);
-        document.getElementById("status").textContent = "Status: Error";
-      }
-    }
-
-    async function startAutoScreenshot(intervalMinutes = 15) {
-      document.getElementById("status").textContent = "Status: Selecting window...";
-      stream = await selectWindow();
-      document.getElementById("status").textContent = "Status: Running";
-
-      // Take the first immediately
-      await takeAndSave();
-
-      // Start countdown
-      nextCaptureIn = intervalMinutes * 60;
-      updateTimerDisplay();
-
-      countdownInterval = setInterval(() => {
-        nextCaptureIn--;
-        if (nextCaptureIn <= 0) nextCaptureIn = intervalMinutes * 60;
-        updateTimerDisplay();
-      }, 1000);
-
-      // Repeat every interval
-      captureInterval = setInterval(takeAndSave, intervalMinutes * 60 * 1000);
-    }
-
-    function stopAutoScreenshot() {
-      clearInterval(captureInterval);
-      clearInterval(countdownInterval);
-      document.getElementById("status").textContent = "Status: Stopped";
-      document.getElementById("timer").textContent = "Next capture in: --";
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
+        console.error('takeAndSave error:', err);
+        statusEl.textContent = 'Status: Error';
       }
     }
 
     function updateTimerDisplay() {
       const minutes = Math.floor(nextCaptureIn / 60);
       const seconds = nextCaptureIn % 60;
-      document.getElementById("timer").textContent =
-        `Next capture in: ${minutes.toString().padStart(2, "0")}:${seconds
-          .toString()
-          .padStart(2, "0")}`;
+      timerEl.textContent = `Next capture in: ${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
     }
+
+    async function startAutoScreenshot(intervalMinutes = 15) {
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      statusEl.textContent = 'Status: Selecting window...';
+      stream = await selectWindow();
+      statusEl.textContent = 'Status: Running';
+
+      // immediate capture
+      await takeAndSave();
+
+      // setup countdown
+      nextCaptureIn = intervalMinutes * 60;
+      updateTimerDisplay();
+      countdownInterval = setInterval(() => {
+        nextCaptureIn--;
+        if (nextCaptureIn <= 0) nextCaptureIn = intervalMinutes * 60;
+        updateTimerDisplay();
+      }, 1000);
+
+      // repeat captures
+      captureInterval = setInterval(takeAndSave, intervalMinutes * 60 * 1000);
+    }
+
+    function stopAutoScreenshot() {
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      clearInterval(captureInterval);
+      clearInterval(countdownInterval);
+      captureInterval = null;
+      countdownInterval = null;
+      nextCaptureIn = 0;
+      updateTimerDisplay();
+      statusEl.textContent = 'Status: Stopped';
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+    }
+
+    startBtn.addEventListener('click', () => startAutoScreenshot(15));
+    stopBtn.addEventListener('click', stopAutoScreenshot);
+    window.addEventListener('beforeunload', stopAutoScreenshot);
   </script>
 </body>
 </html>
